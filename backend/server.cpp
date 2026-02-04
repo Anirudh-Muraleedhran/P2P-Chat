@@ -8,6 +8,7 @@
 #include <mutex>
 #include <algorithm>
 #include "sqlite3.h"
+#include <ctime>
 
 using namespace std;
 
@@ -24,6 +25,17 @@ mutex name_mutex;
 
 map<string, SOCKET> client_names;
 map<string, int> client_user_id;
+
+string current_time()
+{
+    time_t now = time(nullptr);
+    tm local;
+    localtime_s(&local,&now);
+
+    char buf[20];
+    strftime(buf,sizeof(buf),"%H:%M:%S",&local);
+    return string(buf);
+}
 
 // ---------------- DATABASE INIT ----------------
 void init_database()
@@ -137,17 +149,18 @@ void load_history(SOCKET sock, int user_id)
     sqlite3_stmt* stmt = nullptr;
 
     string sql =
-        "SELECT username, content FROM ( "
-        "SELECT u.username AS username, m.content, m.id "
-        "FROM messages m "
-        "JOIN users u ON u.id = m.sender_id "
-        "WHERE m.sender_id = ? "
-        "   OR m.receiver_id = ? "
-        "   OR m.receiver_id IS NULL "
-        "ORDER BY m.id DESC "
-        "LIMIT 30 "
-        ") "
-        "ORDER BY id ASC;";
+    "SELECT username, content, timestamp FROM ( "
+    "SELECT u.username AS username, m.content, m.timestamp, m.id "
+    "FROM messages m "
+    "JOIN users u ON u.id = m.sender_id "
+    "WHERE m.sender_id = ? "
+    "   OR m.receiver_id = ? "
+    "   OR m.receiver_id IS NULL "
+    "ORDER BY m.id DESC "
+    "LIMIT 30 "
+    ") "
+    "ORDER BY id ASC;";
+
 
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
     {
@@ -161,11 +174,14 @@ void load_history(SOCKET sock, int user_id)
     while (sqlite3_step(stmt) == SQLITE_ROW)
     {
         string msg =
-            "[HISTORY] " +
+            "[HISTORY " +
+            string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2))) +
+            "] " +
             string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0))) +
             ": " +
             string(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1))) +
             "\n";
+
 
         send(sock, msg.c_str(), msg.length(), 0);
     }
@@ -194,6 +210,42 @@ void broadcast(const string& msg, SOCKET exclude = INVALID_SOCKET)
         ++it;
     }
 }
+
+// Handeling DM Function
+void handle_dm(const string& sender,int sender_id,const string& full_msg)
+{
+    //Format : "/dm <username> <message>"
+
+    size_t first_space = full_msg.find(' ',4);
+    if(first_space == string::npos)
+    {
+        return ;
+    }
+
+    string target = full_msg.substr(4,first_space-4);
+    string content = full_msg.substr(first_space+1);
+
+    lock_guard<mutex> lock(name_mutex);
+
+    if(!client_names.count(target))
+    {
+        string err = "[SERVER] User not online\n";
+        send(client_names[sender],err.c_str(),err.length(),0);
+        return ;
+    }
+
+    SOCKET target_sock = client_names[target];
+    int reciever_id = client_user_id[target];
+
+    //SAVING DM
+
+    save_message(sender_id,reciever_id,content);
+
+    string dm ="[DM " + current_time() + " from " + sender + "]: " + content + "\n";
+
+    send(target_sock,dm.c_str(),dm.length(),0);
+}
+
 
 // ---------------- CLIENT HANDLER ----------------
 void handle_client(SOCKET sock)
@@ -239,8 +291,17 @@ void handle_client(SOCKET sock)
         string msg(buffer);
         msg.erase(msg.find_last_not_of("\n\r") + 1);
 
-        save_message(user_id, 0, msg);
-        broadcast("[" + name + "]: " + msg + "\n", sock);
+        // DM COMMANDS
+
+        if(msg.rfind("/dm ",0) == 0)
+        {
+            handle_dm(name,user_id,msg);
+        }
+        else
+        {
+            save_message(user_id, 0, msg);
+            broadcast("[" + current_time() + "]: " + name + ": " + msg + "\n", sock);
+        }
     }
 
     {

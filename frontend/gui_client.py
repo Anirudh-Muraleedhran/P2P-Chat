@@ -41,6 +41,8 @@ class ChatGUI:
         )
         self.chat_history.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 
+        self.chat_history.tag_config("dm", foreground="purple")
+
         input_frame = tk.Frame(self.root)
         input_frame.pack(fill=tk.X, padx=10, pady=10)
 
@@ -66,6 +68,7 @@ class ChatGUI:
         if msg:
             try:
                 self.sock.send((msg + "\n").encode("utf-8"))
+                self.update_chat(f"[You]: {msg}\n")
                 self.message_entry.delete(0, tk.END)
             except:
                 self.on_close()
@@ -87,9 +90,17 @@ class ChatGUI:
 
     def _update_chat_safe(self, msg):
         self.chat_history.config(state="normal")
-        self.chat_history.insert(tk.END, msg)
+
+        if msg.startswith("[You]"):
+            self.chat_history.insert(tk.END,msg,"me")
+        elif msg.startswith("[DM"):
+            self.chat_history.insert(tk.END, msg, "dm")
+        else:
+            self.chat_history.insert(tk.END, msg)
+
         self.chat_history.config(state="disabled")
         self.chat_history.yview(tk.END)
+
 
     # ---------- Close ----------
     def on_close(self):
