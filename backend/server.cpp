@@ -40,7 +40,7 @@ string current_time()
 // ---------------- DATABASE INIT ----------------
 void init_database()
 {
-    sqlite3_open("chat_history.db", &db);
+    sqlite3_open(".\\backend\\chat_history.db", &db);
 
     const char* user_sql =
         "CREATE TABLE IF NOT EXISTS users ("
